@@ -1,0 +1,111 @@
+library(MASS)  # for the mvrnorm function
+
+# Draw from MVN with sparse variance matrix function
+rmvn <- function(n, mu, Sigma) {
+  p <- dim(Sigma)[1]
+  L <- Matrix::chol(Sigma)
+  z <- Matrix(rnorm(n * p), p, n)
+  #z <- rnorm(p)
+  result <- (t(mu +  L %*% z))
+  return(result)
+}
+
+## Update random effects
+update_random_effects <- function(y, X, beta, Z_u, Z_v, omega, sigma_u, sigma_v) {
+    # Diagonal matrix of omega
+    Omega <- diag(omega)
+    
+    # Update u
+    Sigma_u <- solve(t(Z_u) %*% Omega %*% Z_u + diag(1/sigma_u^2, nrow = ncol(Z_u)))
+    mu_u <- Sigma_u %*% t(Z_u) %*% Omega %*% (y - 0.5 - X %*% beta - Z_v %*% v)
+    u <- mvrnorm(1, mu = mu_u, Sigma = Sigma_u)
+    
+    # Update v
+    Sigma_v <- solve(t(Z_v) %*% Omega %*% Z_v + diag(1/sigma_v^2, nrow = ncol(Z_v)))
+    mu_v <- Sigma_v %*% t(Z_v) %*% Omega %*% (y - 0.5 - X %*% beta - Z_u %*% u)
+    v <- mvrnorm(1, mu = mu_v, Sigma = Sigma_v)
+    
+    return(list(u = u, v = v))
+}
+
+library(MASS)  # for mvtnorm functions
+library(Matrix)  # for sparse matrix operations
+library(BayesLogit)  # Polya-Gamma sampling
+
+GibbsSamplerLogit <- function(X, Y, Z_u, Z_v, nburn, nsim, nthin, beta.init, u.init, v.init, sigma_u2.init, sigma_v2.init, a_sigma = 0.1, b_sigma = 0.1) {
+  N <- length(Y)
+  p <- dim(X)[2]
+  J <- ncol(Z_u)  
+  K <- ncol(Z_v)  
+  
+  # Initialize parameters
+  Beta <- beta.init
+  U <- u.init
+  V <- v.init
+  Sigma2_u <- sigma_u2.init
+  Sigma2_v <- sigma_v2.init
+  
+  # Storage for parameters
+  Beta.chain <- matrix(0, p, nsim / nthin)
+  U.chain <- matrix(0, J, nsim / nthin)
+  V.chain <- matrix(0, K, nsim / nthin)
+  Sigma2_u.chain <- numeric(nsim / nthin)
+  Sigma2_v.chain <- numeric(nsim / nthin)
+  
+  # Main Gibbs sampling loop
+  for (index in 1:(nsim + nburn)) {
+    # Update Polya-Gamma variables
+    eta <- X %*% Beta + Z_u %*% U + Z_v %*% V
+    omega <- rpg(n = N, c = rep(1, N), h = eta)  # Using BayesLogit package
+    Omega <- Diagonal(x = omega)
+    
+    # Update Beta
+    XTOmegaX <- t(X) %*% Omega %*% X
+    XTOmegaY <- t(X) %*% (Omega %*% (Y - 0.5))
+    Sigma_beta <- solve(XTOmegaX + diag(1/p, nrow = p))  # Regularization
+    Mu_beta <- Sigma_beta %*% (XTOmegaY)
+    Beta <- mvrnorm(1, mu = Mu_beta, Sigma = Sigma_beta)
+    
+    # Update U
+    Z_uTOmegaZ_u <- t(Z_u) %*% Omega %*% Z_u
+    Z_uTOmegaY <- t(Z_u) %*% (Omega %*% (Y - 0.5 - X %*% Beta - Z_v %*% V))
+    Sigma_u <- solve(Z_uTOmegaZ_u + diag(1/Sigma2_u, nrow = J))
+    Mu_u <- Sigma_u %*% Z_uTOmegaY
+    U <- mvrnorm(1, mu = Mu_u, Sigma = Sigma_u)
+    
+    # Update V
+    Z_vTOmegaZ_v <- t(Z_v) %*% Omega %*% Z_v
+    Z_vTOmegaY <- t(Z_v) %*% (Omega %*% (Y - 0.5 - X %*% Beta - Z_u %*% U))
+    Sigma_v <- solve(Z_vTOmegaZ_v + diag(1/Sigma2_v, nrow = K))
+    Mu_v <- Sigma_v %*% Z_vTOmegaY
+    V <- mvrnorm(1, mu = Mu_v, Sigma = Sigma_v)
+    
+    # Update Sigma2_u
+    Sigma2_u <- 1 / rgamma(1, shape = a_sigma + J/2, rate = b_sigma + 0.5 * sum(U^2))
+    
+    # Update Sigma2_v
+    Sigma2_v <- 1 / rgamma(1, shape = a_sigma + K/2, rate = b_sigma + 0.5 * sum(V^2))
+    
+    # Store samples post burn-in and thinning
+    if (index > nburn && ((index - nburn) %% nthin == 0)) {
+      iter <- (index - nburn) / nthin
+      Beta.chain[, iter] <- Beta
+      U.chain[, iter] <- U
+      V.chain[, iter] <- V
+      Sigma2_u.chain[iter] <- Sigma2_u
+      Sigma2_v.chain[iter] <- Sigma2_v
+    }
+  }
+  
+  return(list(Beta.chain = Beta.chain, U.chain = U.chain, V.chain = V.chain, Sigma2_u.chain = Sigma2_u.chain, Sigma2_v.chain = Sigma2_v.chain))
+}
+
+# Example usage:
+# X <- model.matrix(~ predictors, data=data)  # predictor matrix
+# Y <- data$response  # binary response variable
+# Z_u <- model.matrix(~ 1|school, data=data)  # school random effects design matrix
+# Z_v <- model.matrix(~ 1|district, data=data)  # district random effects design matrix
+# nsim <- 10000; nburn <- 5000; nthin <- 10
+# beta.init <- rep(0, dim(X)[2]); u.init <- rep(0, ncol(Z_u)); v.init <- rep(0, ncol(Z_v))
+# sigma_u2.init <- 1; sigma_v2.init <- 1
+# results <- GibbsSamplerLogit(X, Y, Z_u, Z_v, nburn, nsim, nthin, beta.init, u.init, v.init, sigma_u2.init, sigma_v2.init)
