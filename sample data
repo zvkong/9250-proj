@@ -1,0 +1,64 @@
+set.seed(123)  # for reproducibility
+
+# Parameters
+n_students <- 1000   # Number of students
+n_schools <- 20      # Number of schools
+n_districts <- 5     # Number of districts
+
+# Random effects variances
+sigma_u <- 1.0  # SD for schools
+sigma_v <- 1.5  # SD for districts
+
+# Random effects
+school_effects <- rnorm(n_schools, mean = 0, sd = sigma_u)
+district_effects <- rnorm(n_districts, mean = 0, sd = sigma_v)
+
+# Assigning schools to districts randomly
+school_to_district <- sample(n_districts, n_schools, replace = TRUE)
+
+# Data Simulation
+student_data <- data.frame(
+  student_id = 1:n_students,
+  school_id = sample(n_schools, n_students, replace = TRUE),
+  predictor = rnorm(n_students, mean = 50, sd = 10)
+)
+
+# Map school effects and district effects onto students
+student_data$school_effect <- school_effects[student_data$school_id]
+student_data$district_effect <- district_effects[school_to_district[student_data$school_id]]
+
+# Generate a binary outcome based on a logistic model
+baseline_intercept <- -1  # Intercept of the model
+student_data$linear_predictor <- baseline_intercept +
+  0.05 * student_data$predictor +  # coefficient for the predictor
+  student_data$school_effect +
+  student_data$district_effect
+
+# Convert linear predictor to probabilities using the logistic function
+student_data$probability <- plogis(student_data$linear_predictor)
+
+# Simulate binary outcome
+student_data$response <- rbinom(n_students, size = 1, prob = student_data$probability)
+
+# Creating matrices for the Gibbs sampler
+X <- cbind(1, scale(student_data$predictor))  # including intercept and standardized predictor
+Z_u <- model.matrix(~ factor(school_id) - 1, data = student_data)  # random effects for schools
+Z_v <- model.matrix(~ factor(school_to_district[school_id]) - 1, data = student_data)  # random effects for districts
+
+# Initial parameters for the Gibbs sampler
+nsim <- 1000
+nburn <- 500
+nthin <- 5
+beta.init <- rep(0, ncol(X))
+u.init <- rep(0, ncol(Z_u))
+v.init <- rep(0, ncol(Z_v))
+sigma_u2.init <- 1
+sigma_v2.init <- 1
+
+# Run Gibbs Sampler
+results <- GibbsSamplerLogit(X, student_data$response, Z_u, Z_v, nburn, nsim, nthin, beta.init, u.init, v.init, sigma_u2.init, sigma_v2.init)
+
+# Examining results
+print(summary(results$Beta.chain))
+print(summary(results$Sigma2_u.chain))
+print(summary(results$Sigma2_v.chain))
