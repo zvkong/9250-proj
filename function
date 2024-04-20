@@ -1,3 +1,14 @@
+# Draw from MVN with sparse variance matrix function
+rmvn <- function(n, mu, Sigma) {
+  p <- dim(Sigma)[1]
+  L <- Matrix::chol(Sigma)
+  z <- Matrix(rnorm(n * p), p, n)
+  #z <- rnorm(p)
+  result <- (t(mu +  L %*% z))
+  return(result)
+}
+
+# Gibbs Sampler 
 GibbsSamplerLogit <- function(X, Y, Z_u, Z_v, nburn, nsim, nthin, a = 0.1, b = 0.1, beta.init, u.init, v.init, sigma_u2.init, sigma_v2.init) {
   N <- length(Y)
   p <- dim(X)[2]
